@@ -12,8 +12,10 @@ import * as Cheerio from 'cheerio';
 import FormData from 'form-data';
 import { readFileSync } from 'fs';
 import * as _ from 'lodash-es';
-// @ts-ignore
-import NHentaiApi from 'nhentai-api';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const NHentaiApi = require('nhentai-api');
 
 interface SaucenaoSearchParams {
 	imageUrl?: string;
@@ -227,7 +229,7 @@ const exts = {
 };
 
 // @ts-ignore
-const nhentaiApi = new NHentaiApi();
+const nhentaiApi = new NHentaiApi(); // Assuming require returns the constructor
 
 const getNHentaiSearchURL = (keyword: string) => encodeURI(nhentaiApi.search(keyword));
 
