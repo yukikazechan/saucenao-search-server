@@ -13,7 +13,7 @@ import FormData from 'form-data';
 import { readFileSync } from 'fs';
 import * as _ from 'lodash-es';
 // @ts-ignore
-import * as NHentaiApi from 'nhentai-api';
+import { NHentaiApi } from 'nhentai-api';
 
 interface SaucenaoSearchParams {
 	imageUrl?: string;
@@ -227,7 +227,7 @@ const exts = {
 };
 
 // @ts-ignore
-const nhentaiApi = new NHentaiApi.default(); // Assuming the default export is the class/function
+const nhentaiApi = new NHentaiApi();
 
 const getNHentaiSearchURL = (keyword: string) => encodeURI(nhentaiApi.search(keyword));
 
