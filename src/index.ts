@@ -23,6 +23,8 @@ interface SaucenaoSearchParams {
 	db?: keyof typeof snDB;
 }
 
+console.error(NHentaiApi);
+
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
 const SAUCENAO_HOST = process.env.SAUCENAO_HOST || 'saucenao.com';
 
