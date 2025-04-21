@@ -16,6 +16,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const NHentaiApi = require('nhentai-api');
+// console.error(NHentaiApi);
 
 interface SaucenaoSearchParams {
 	imageUrl?: string;
