@@ -8,7 +8,7 @@ import FormData from 'form-data';
 import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const NHentaiApi = require('nhentai-api');
+const NHentaiApi = require('nhentai-api'); // Assuming require returns the constructor
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
 const SAUCENAO_HOST = process.env.SAUCENAO_HOST || 'saucenao.com';
 if (!SAUCENAO_API_KEY) {
@@ -193,7 +193,7 @@ const exts = {
     g: 'gif',
 };
 // @ts-ignore
-const nhentaiApi = new NHentaiApi(); // Assuming require returns the constructor
+const nhentaiApi = new NHentaiApi();
 const getNHentaiSearchURL = (keyword) => encodeURI(nhentaiApi.search(keyword));
 async function getDetailFromNHentaiAPI(name) {
     // Skipping Puppeteer implementation for now

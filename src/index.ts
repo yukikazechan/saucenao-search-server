@@ -15,7 +15,7 @@ import * as _ from 'lodash-es';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const NHentaiApi = require('nhentai-api');
+const NHentaiApi = require('nhentai-api'); // Assuming require returns the constructor
 
 interface SaucenaoSearchParams {
 	imageUrl?: string;
@@ -229,7 +229,7 @@ const exts = {
 };
 
 // @ts-ignore
-const nhentaiApi = new NHentaiApi(); // Assuming require returns the constructor
+const nhentaiApi = new NHentaiApi();
 
 const getNHentaiSearchURL = (keyword: string) => encodeURI(nhentaiApi.search(keyword));
 
