@@ -15,15 +15,13 @@ import * as _ from 'lodash-es';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const NHentaiApi = require('nhentai-api'); // Assuming require returns the constructor
+const NHentaiApi = require('nhentai-api');
 
 interface SaucenaoSearchParams {
 	imageUrl?: string;
 	imageBuffer?: string;
 	db?: keyof typeof snDB;
 }
-
-console.error(NHentaiApi);
 
 const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
 const SAUCENAO_HOST = process.env.SAUCENAO_HOST || 'saucenao.com';
@@ -231,7 +229,7 @@ const exts = {
 };
 
 // @ts-ignore
-const nhentaiApi = new NHentaiApi();
+const nhentaiApi = new NHentaiApi.API();
 
 const getNHentaiSearchURL = (keyword: string) => encodeURI(nhentaiApi.search(keyword));
 
