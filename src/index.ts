@@ -281,7 +281,7 @@ class SaucenaoSearchServer {
 	constructor() {
 		this.server = new Server(
 			{
-				name: 'saucenao-search-server',
+				name: '搜图',
 				version: '0.1.0',
 			},
 			{
@@ -438,10 +438,6 @@ class SaucenaoSearchServer {
 							{
 								type: 'text',
 								text: outputText,
-							},
-							{
-								type: 'application/json',
-								json: { results },
 							}
 						],
 					};
