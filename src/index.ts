@@ -114,7 +114,7 @@ class SauceNAOServer {
 							},
 							imageDirectory: {
 								type: 'string',
-								description: 'The directory (relative to IMAGE_CACHE_PATH or absolute if IMAGE_CACHE_PATH is not set) to search for the latest image file. If the user sends an image directly, set this to an empty string ("") to use the IMAGE_CACHE_PATH. Note: This method relies on finding the most recently modified image file, which might lead to incorrect selections if multiple files are added concurrently.',
+								description: 'The directory (relative to IMAGE_CACHE_PATH or absolute if IMAGE_CACHE_PATH is not set) to search for the latest image file. IMPORTANT: If the user sends an image directly without specifying a path, set this parameter to an empty string (""). The server will then use the IMAGE_CACHE_PATH. Note: This method relies on finding the most recently modified image file, which might lead to incorrect selections if multiple files are added concurrently.',
 							},
 							db: {
 								type: 'string',
