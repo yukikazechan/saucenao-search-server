@@ -3,18 +3,21 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError, } from '@modelcontextprotocol/sdk/types.js';
 import axios from 'axios';
-import * as Cheerio from 'cheerio';
 import FormData from 'form-data';
-import { readFileSync } from 'fs';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const NHentaiApi = require('nhentai-api');
-const SAUCENAO_API_KEY = process.env.SAUCENAO_API_KEY;
-const SAUCENAO_HOST = process.env.SAUCENAO_HOST || 'saucenao.com';
-if (!SAUCENAO_API_KEY) {
-    console.error('SAUCENAO_API_KEY environment variable is required');
-    process.exit(1);
+import { readFileSync, statSync } from 'fs'; // 导入 statSync
+import path from 'path';
+import { readdir } from 'fs/promises';
+const API_KEY = process.env.SAUCENAO_API_KEY; // provided by MCP config
+if (!API_KEY) {
+    throw new Error('SAUCENAO_API_KEY environment variable is required');
 }
+const IMAGE_CACHE_PATH = process.env.IMAGE_CACHE_PATH; // provided by MCP config
+console.error(`[DEBUG] IMAGE_CACHE_PATH: ${IMAGE_CACHE_PATH}`);
+if (!IMAGE_CACHE_PATH) {
+    console.warn('IMAGE_CACHE_PATH environment variable is not set. imageDirectory functionality may be limited.');
+}
+const VALID_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+// 参考 src/plugin/saucenao.mjs 中的 snDB
 const snDB = {
     all: 999,
     pixiv: 5,
@@ -24,225 +27,27 @@ const snDB = {
     anime: 21,
     原图: 10000,
 };
-/**
- * 取得搜图结果
- *
- * @param {string} host 自定义 saucenao 的 host
- * @param {string} api_key saucenao api key
- * @param {MsgImage} img 欲搜索的图片
- * @param {number} [db=999] 搜索库
- * @returns Promise<any>
- */
-async function getSearchResult(host, api_key, img, db = 999) {
-    if (!/^https?:\/\//.test(host))
-        host = `https://${host}`;
-    const dbParam = {};
-    switch (db) {
-        case snDB.doujin:
-            dbParam.dbs = [18, 38];
-            break;
-        case snDB.anime:
-            dbParam.dbs = [21, 22];
-            break;
-        default:
-            dbParam.db = db;
-            break;
-    }
-    const url = `${host}/search.php`;
-    const params = {
-        ...(api_key ? { api_key } : {}),
-        ...dbParam,
-        output_type: 2,
-        numres: 3,
-        // hide: global.config.bot.hideImgWhenSaucenaoNSFW, // TODO: Make configurable via env var or tool param
-    };
-    // Simplified image handling for MCP: prefer URL if available, otherwise expect base64
-    if (img.isUrlValid && img.url) {
-        return axios.get(url, {
-            params: {
-                ...params,
-                url: img.url,
-            },
-        });
-    }
-    else {
-        const path = await img.getPath();
-        if (path) {
-            const form = new FormData();
-            form.append('file', readFileSync(path), 'image');
-            return axios.post(url, form, {
-                params,
-                headers: form.getHeaders(),
-            });
-        }
-    }
-    throw new McpError(ErrorCode.InvalidParams, 'Invalid image input: URL or local path required.');
-}
-let ascii2dHostsI = 0;
-const ASCII2D_HOSTS = process.env.ASCII2D_HOSTS ? process.env.ASCII2D_HOSTS.split(',') : ['https://ascii2d.net'];
-/**
- * ascii2d 搜索
- *
- * @param {MsgImage} img 图片
- * @returns 色合検索 和 特徴検索 结果
- */
-async function doAscii2dSearch(img) {
-    const hosts = ASCII2D_HOSTS;
-    let host = hosts[ascii2dHostsI++ % hosts.length];
-    if (!/^https?:\/\//.test(host))
-        host = `https://${host}`;
-    // Skipping Puppeteer implementation for now
-    const callApi = callAscii2dApi; // Assuming non-Puppeteer API call
-    const ret = await callApi(host, img); // Simplified retry logic for MCP
-    const colorURL = ret.request.res.responseUrl;
-    if (!colorURL.includes('/color/')) {
-        // Simplified error handling for MCP
-        throw new McpError(ErrorCode.InternalError, 'ascii2d search failed to return color URL.');
-    }
-    const colorDetail = getAscii2dDetail(ret, host);
-    const bovwURL = colorURL.replace('/color/', '/bovw/');
-    const bovwDetail = await axios.get(bovwURL).then(r => getAscii2dDetail(r, host)); // Using axios directly
-    const isCf = host === 'https://ascii2d.net';
-    const colorRet = await getAscii2dResult(colorDetail, isCf);
-    const bovwRet = await getAscii2dResult(bovwDetail, isCf);
-    return {
-        color: `ascii2d 色合検索\n${colorRet.result}`,
-        bovw: `ascii2d 特徴検索\n${bovwRet.result}`,
-        success: colorRet.success && bovwRet.success,
-    };
-}
-/**
- * @param {MsgImage} img
- */
-async function callAscii2dApi(host, img) {
-    const isCf = host === 'https://ascii2d.net';
-    // Simplified image handling for MCP: prefer URL if available, otherwise expect base64
-    if (img.isUrlValid && img.url) {
-        return axios.get(`${host}/search/url/${img.url}`);
-    }
-    else {
-        const path = await img.getPath();
-        if (path) {
-            const form = new FormData();
-            form.append('file', readFileSync(path), 'image');
-            return axios.post(`${host}/search/file`, form, { headers: form.getHeaders() });
-        }
-    }
-    throw new McpError(ErrorCode.InvalidParams, 'Invalid image input for ascii2d: URL or local path required.');
-}
-/**
- * 解析 ascii2d 网页结果
- *
- * @param {any} ret ascii2d response
- * @param {string} baseURL ascii2d base URL
- * @returns 画像搜索结果
- */
-function getAscii2dDetail(ret, baseURL) {
-    let result = {};
-    const html = ret.data;
-    const $ = Cheerio.load(html, { decodeEntities: false });
-    const $itemBox = $('.item-box');
-    for (let i = 0; i < $itemBox.length; i++) {
-        const $box = $($itemBox[i]);
-        const $link = $box.find('.detail-box a');
-        // 普通结果
-        if ($link.length) {
-            const $title = $($link[0]);
-            const $author = $($link[1]);
-            result = {
-                thumbnail: baseURL + $box.find('.image-box img').attr('src'),
-                title: $title.text(),
-                author: $author.text(),
-                url: $title.attr('href'),
-                author_url: $author.attr('href'),
-            };
-            break;
-        }
-        // 人为提交结果
-        const $external = $box.find('.external');
-        if ($external.length) {
-            result = {
-                thumbnail: baseURL + $box.find('.image-box img').attr('src'),
-                title: $external.text(),
-            };
-            break;
-        }
-    }
-    if (!result.title) {
-        console.error('[error] ascii2d getDetail');
-        console.error(ret);
-    }
-    return result;
-}
-async function getAscii2dResult({ url, title, author, thumbnail, author_url }, isCf = true) {
-    if (!title)
-        return { success: false, result: '由未知错误导致搜索失败' };
-    const texts = [author ? `「${title}」/「${author}」` : title];
-    if (thumbnail) { // Simplified thumbnail handling for MCP
-        texts.push(`Thumbnail: ${thumbnail}`);
-    }
-    if (url)
-        texts.push(`URL: ${url}`);
-    if (author_url)
-        texts.push(`Author URL: ${author_url}`);
-    return { success: true, result: texts.join('\n') };
-}
-const exts = {
-    j: 'jpg',
-    p: 'png',
-    g: 'gif',
-};
-// @ts-ignore
-const nhentaiApi = new NHentaiApi.API();
-const getNHentaiSearchURL = (keyword) => encodeURI(nhentaiApi.search(keyword));
-async function getDetailFromNHentaiAPI(name) {
-    // Skipping Puppeteer implementation for now
-    const get = axios.get; // Using axios directly
-    let json = await get(getNHentaiSearchURL(`${name} chinese`)).then(r => r.data);
-    if (json.result.length === 0) {
-        json = await get(getNHentaiSearchURL(name)).then(r => r.data);
-        if (json.result.length === 0)
-            return;
-    }
-    const data = json.result[0];
-    return {
-        url: `https://nhentai.net/g/${data.id}/`,
-        thumb: `https://t.nhentai.net/galleries/${data.media_id}/cover.${exts[data.images.thumbnail.t]}`,
-    };
-}
-async function getDetailFromNHentaiWebsite(origin, name) {
-    return (await _getDetailFromNHentaiWebsite(origin, `${name} chinese`)) || (await _getDetailFromNHentaiWebsite(origin, name));
-}
-async function _getDetailFromNHentaiWebsite(origin, name) {
-    const { data } = await axios.get(`${origin}/search/?q=${encodeURIComponent(name)}`, { responseType: 'text' });
-    const $ = Cheerio.load(data);
-    const gallery = $('.gallery').get(0);
-    if (!gallery)
-        return;
-    const $gallery = $(gallery);
-    const href = $gallery.find('a').attr('href');
-    if (!href)
-        return;
-    const url = `https://nhentai.net${href}`;
-    const $img = $gallery.find('img');
-    const thumb = $img.attr('data-src') || $img.attr('src');
-    if (!thumb)
-        return;
-    return { url, thumb };
-}
-class SaucenaoSearchServer {
+class SauceNAOServer {
     server;
+    axiosInstance;
     constructor() {
         this.server = new Server({
-            name: '搜图',
+            name: 'saucenao-search-server',
             version: '0.1.0',
         }, {
             capabilities: {
                 tools: {},
             },
         });
+        this.axiosInstance = axios.create({
+            baseURL: 'https://saucenao.com',
+            params: {
+                appid: API_KEY,
+                output_type: 2,
+                numres: 3,
+            },
+        });
         this.setupToolHandlers();
-        // Error handling
         this.server.onerror = (error) => console.error('[MCP Error]', error);
         process.on('SIGINT', async () => {
             await this.server.close();
@@ -253,207 +58,152 @@ class SaucenaoSearchServer {
         this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [
                 {
-                    name: 'saucenao_search',
-                    description: 'Search for the source of an image using SauceNAO',
+                    name: 'search-image',
+                    description: 'Search for an image using SauceNAO. Provide either a direct imagePath or an imageDirectory.',
                     inputSchema: {
                         type: 'object',
                         properties: {
-                            imageUrl: {
+                            imagePath: {
                                 type: 'string',
-                                description: 'URL of the image to search',
-                                format: 'url',
+                                description: 'The direct path to the image file to search.',
                             },
-                            imageBuffer: {
+                            imageDirectory: {
                                 type: 'string',
-                                description: 'Base64 encoded image buffer',
+                                description: 'The directory (relative to IMAGE_CACHE_PATH or absolute if IMAGE_CACHE_PATH is not set) to search for the latest image file. If empty, uses IMAGE_CACHE_PATH. Note: This method relies on finding the most recently modified image file, which might lead to incorrect selections if multiple files are added concurrently.',
                             },
                             db: {
                                 type: 'string',
-                                description: 'Search database (e.g., "all", "pixiv", "danbooru", "book", "doujin", "anime")',
+                                description: 'The database to search (e.g., "all", "pixiv", "anime")',
                                 enum: Object.keys(snDB),
                                 default: 'all',
                             },
                         },
-                        oneOf: [
-                            { required: ['imageUrl'] },
-                            { required: ['imageBuffer'] },
-                        ],
-                    },
-                },
-                {
-                    name: 'ascii2d_search',
-                    description: 'Search for the source of an image using ascii2d',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            imageUrl: {
-                                type: 'string',
-                                description: 'URL of the image to search',
-                                format: 'url',
-                            },
-                            imageBuffer: {
-                                type: 'string',
-                                description: 'Base64 encoded image buffer',
-                            },
-                        },
-                        oneOf: [
-                            { required: ['imageUrl'] },
-                            { required: ['imageBuffer'] },
-                        ],
-                    },
-                },
-                {
-                    name: 'nhentai_search',
-                    description: 'Search for doujinshi on nhentai by name',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            name: {
-                                type: 'string',
-                                description: 'Name of the doujinshi to search for',
-                            },
-                        },
-                        required: ['name'],
+                        required: [],
+                        anyOf: [
+                            { required: ['imagePath'] },
+                            { required: ['imageDirectory'] }
+                        ]
                     },
                 },
             ],
         }));
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+            const args = request.params.arguments;
+            if (request.params.name !== 'search-image') {
+                throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
+            }
+            let imagePathToSearch;
+            let directoryToSearch;
+            if (args.imagePath) {
+                imagePathToSearch = args.imagePath;
+            }
+            else if (args.imageDirectory !== undefined) {
+                if (!IMAGE_CACHE_PATH) {
+                    throw new McpError(ErrorCode.InvalidParams, 'IMAGE_CACHE_PATH environment variable is not set. Cannot use imageDirectory.');
+                }
+                if (args.imageDirectory === "") {
+                    directoryToSearch = IMAGE_CACHE_PATH;
+                }
+                else {
+                    directoryToSearch = path.join(IMAGE_CACHE_PATH, args.imageDirectory);
+                }
+                console.error(`[DEBUG] Attempting to read directory: ${directoryToSearch}`);
+                try {
+                    const filesInDir = await readdir(directoryToSearch);
+                    if (filesInDir.length === 0) {
+                        throw new McpError(ErrorCode.InvalidParams, `No files found in directory: ${directoryToSearch}`);
+                    }
+                    let latestFile;
+                    let latestMtime;
+                    for (const file of filesInDir) {
+                        const fullPath = path.join(directoryToSearch, file);
+                        const fileStat = statSync(fullPath);
+                        const ext = path.extname(file).toLowerCase();
+                        if (fileStat.isFile() && VALID_IMAGE_EXTENSIONS.includes(ext)) {
+                            if (!latestMtime || fileStat.mtime > latestMtime) {
+                                latestMtime = fileStat.mtime;
+                                latestFile = fullPath;
+                            }
+                        }
+                    }
+                    if (latestFile) {
+                        imagePathToSearch = latestFile;
+                    }
+                    else {
+                        throw new McpError(ErrorCode.InvalidParams, `No valid image files found in directory: ${directoryToSearch}`);
+                    }
+                }
+                catch (error) {
+                    throw new McpError(ErrorCode.InvalidParams, `Error reading directory ${directoryToSearch}: ${error}`);
+                }
+            }
+            else {
+                throw new McpError(ErrorCode.InvalidParams, 'Either imagePath or imageDirectory must be provided.');
+            }
+            if (typeof imagePathToSearch !== 'string') {
+                throw new McpError(ErrorCode.InvalidParams, 'Could not determine image path from provided arguments.');
+            }
+            console.error(`[DEBUG] Image path to search: ${imagePathToSearch}`);
+            const dbId = snDB[args.db || 'all'];
             try {
-                if (request.params.name === 'saucenao_search') {
-                    const { imageUrl, imageBuffer, db = 'all' } = request.params.arguments;
-                    if (!imageUrl && !imageBuffer) {
-                        throw new McpError(ErrorCode.InvalidParams, 'Either imageUrl or imageBuffer must be provided.');
+                const form = new FormData();
+                form.append('file', readFileSync(imagePathToSearch), path.basename(imagePathToSearch));
+                const response = await this.axiosInstance.post('/search.php', form, {
+                    params: {
+                        api_key: API_KEY,
+                        output_type: 2,
+                        numres: 3,
+                        db: dbId,
+                    },
+                    headers: form.getHeaders(),
+                });
+                const data = response.data;
+                if (data.results && data.results.length > 0) {
+                    const result = data.results[0];
+                    const simText = parseFloat(result.header.similarity).toFixed(2);
+                    let title = result.data.title || result.data.source;
+                    const author = result.data.member_name || result.data.author || result.data.artist;
+                    if (author) {
+                        title = `「${title}」/「${author}」`;
                     }
-                    const searchDb = snDB[db];
-                    if (searchDb === undefined) {
-                        throw new McpError(ErrorCode.InvalidParams, `Invalid database specified: ${db}`);
-                    }
-                    const img = {
-                        isUrlValid: !!imageUrl,
-                        url: imageUrl,
-                        getPath: async () => {
-                            if (imageBuffer) {
-                                const tempDir = require('os').tmpdir();
-                                const tempFilePath = require('path').join(tempDir, `upload_${Date.now()}.png`);
-                                require('fs').writeFileSync(tempFilePath, Buffer.from(imageBuffer, 'base64'));
-                                return tempFilePath;
-                            }
-                            return undefined;
-                        },
+                    const url = result.data.ext_urls ? result.data.ext_urls[0] : '';
+                    const output = {
+                        similarity: simText,
+                        title: title,
+                        url: url,
+                        thumbnail: result.header.thumbnail,
+                        index_id: result.header.index_id,
                     };
-                    const ret = await getSearchResult(SAUCENAO_HOST, SAUCENAO_API_KEY, img, searchDb);
-                    const data = ret.data;
-                    if (typeof data !== 'object' || !data.results || data.results.length === 0) {
-                        return {
-                            content: [{ type: 'text', text: 'No results found.' }],
-                        };
-                    }
-                    const results = data.results.map((result) => {
-                        const { header, data } = result;
-                        const similarity = parseFloat(header.similarity).toFixed(2);
-                        const title = data.title || data.source || '';
-                        const author = data.member_name || data.author || data.artist || '';
-                        const url = data.ext_urls ? data.ext_urls[0] : '';
-                        return {
-                            similarity,
-                            title,
-                            author,
-                            url,
-                            thumbnail: header.thumbnail,
-                            index_id: header.index_id,
-                        };
-                    });
-                    const outputText = results.map((res) => {
-                        let text = `相似度: ${res.similarity}%\n`;
-                        if (res.title)
-                            text += `标题: ${res.title}\n`;
-                        if (res.author)
-                            text += `作者: ${res.author}\n`;
-                        if (res.url)
-                            text += `链接: ${res.url}\n`;
-                        return text;
-                    }).join('---\n');
                     return {
                         content: [
                             {
                                 type: 'text',
-                                text: outputText,
-                            }
+                                text: `相似度: ${output.similarity}%\n标题: ${output.title}\n链接: ${output.url}\n缩略图: ${output.thumbnail}`,
+                            },
                         ],
                     };
                 }
-                else if (request.params.name === 'ascii2d_search') {
-                    const { imageUrl, imageBuffer } = request.params.arguments;
-                    if (!imageUrl && !imageBuffer) {
-                        throw new McpError(ErrorCode.InvalidParams, 'Either imageUrl or imageBuffer must be provided.');
-                    }
-                    const img = {
-                        isUrlValid: !!imageUrl,
-                        url: imageUrl,
-                        getPath: async () => {
-                            if (imageBuffer) {
-                                const tempDir = require('os').tmpdir();
-                                const tempFilePath = require('path').join(tempDir, `upload_${Date.now()}.png`);
-                                require('fs').writeFileSync(tempFilePath, Buffer.from(imageBuffer, 'base64'));
-                                return tempFilePath;
-                            }
-                            return undefined;
-                        },
-                    };
-                    const ascii2dResults = await doAscii2dSearch(img);
-                    let outputText = '';
-                    if (ascii2dResults.color)
-                        outputText += ascii2dResults.color + '\n';
-                    if (ascii2dResults.bovw)
-                        outputText += ascii2dResults.bovw + '\n';
-                    if (!ascii2dResults.success) {
-                        outputText += 'ascii2d search might not be successful.';
-                    }
+                else if (data.header.message) {
                     return {
                         content: [
                             {
                                 type: 'text',
-                                text: outputText.trim(),
+                                text: `SauceNAO API Error: ${data.header.message}`,
                             },
-                            // Optionally return structured data
-                            {
-                                type: 'application/json',
-                                json: ascii2dResults,
-                            }
                         ],
-                    };
-                }
-                else if (request.params.name === 'nhentai_search') {
-                    const { name } = request.params.arguments;
-                    const NHENTAI_MIRROR_SITE = process.env.NHENTAI_MIRROR_SITE;
-                    if (!name) {
-                        throw new McpError(ErrorCode.InvalidParams, 'Name parameter is required for nhentai search.');
-                    }
-                    // Prioritize API search, fallback to website search if mirror site is configured
-                    const nhentaiResult = await getDetailFromNHentaiAPI(name) || (NHENTAI_MIRROR_SITE ? await getDetailFromNHentaiWebsite(NHENTAI_MIRROR_SITE, name) : undefined);
-                    if (!nhentaiResult) {
-                        return {
-                            content: [{ type: 'text', text: `No results found for "${name}" on nhentai.` }],
-                        };
-                    }
-                    const outputText = `URL: ${nhentaiResult.url}\nThumbnail: ${nhentaiResult.thumb}`;
-                    return {
-                        content: [
-                            {
-                                type: 'text',
-                                text: outputText,
-                            },
-                            // Optionally return structured data
-                            {
-                                type: 'application/json',
-                                json: nhentaiResult,
-                            }
-                        ],
+                        isError: true,
                     };
                 }
                 else {
-                    throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: 'SauceNAO search failed: No results found.',
+                            },
+                        ],
+                        isError: true,
+                    };
                 }
             }
             catch (error) {
@@ -462,33 +212,13 @@ class SaucenaoSearchServer {
                         content: [
                             {
                                 type: 'text',
-                                text: `API error: ${error.response?.data.message ?? error.message}`,
+                                text: `SauceNAO request error: ${error.response?.data.message ?? error.message}`,
                             },
                         ],
                         isError: true,
                     };
                 }
-                if (error instanceof McpError) {
-                    return {
-                        content: [{ type: 'text', text: `MCP Error: ${error.message}` }],
-                        isError: true,
-                    };
-                }
-                return {
-                    content: [{ type: 'text', text: `An unexpected error occurred: ${error.message}` }],
-                    isError: true,
-                };
-            }
-            finally {
-                // Clean up temporary file if created for imageBuffer
-                const { imageBuffer } = request.params.arguments; // Use any for finally block
-                if (imageBuffer) {
-                    const tempDir = require('os').tmpdir();
-                    const tempFilePath = require('path').join(tempDir, `upload_${Date.now()}.png`);
-                    if (require('fs').existsSync(tempFilePath)) {
-                        require('fs').unlinkSync(tempFilePath);
-                    }
-                }
+                throw error;
             }
         });
     }
@@ -498,5 +228,5 @@ class SaucenaoSearchServer {
         console.error('SauceNAO Search MCP server running on stdio');
     }
 }
-const server = new SaucenaoSearchServer();
+const server = new SauceNAOServer();
 server.run().catch(console.error);
