@@ -213,18 +213,72 @@ class SauceNAOServer {
 						`Error reading directory ${directoryToSearch}: ${error}`
 					);
 				}
-			} else {
+			} else if (args.imagePath === undefined && args.imageDirectory === undefined) {
+				if (!IMAGE_CACHE_PATH) {
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						'IMAGE_CACHE_PATH environment variable is not set. Cannot use default image directory.'
+					);
+				}
+				directoryToSearch = IMAGE_CACHE_PATH;
+			}
+
+
+			if (typeof imagePathToSearch !== 'string' && typeof directoryToSearch !== 'string') {
 				throw new McpError(
 					ErrorCode.InvalidParams,
-					'Either imagePath or imageDirectory must be provided.'
+					'Could not determine image path or directory from provided arguments.'
 				);
 			}
 
+			// If directoryToSearch is set but imagePathToSearch is not, find the latest image in the directory
+			if (directoryToSearch && typeof imagePathToSearch !== 'string') {
+				console.error(`[DEBUG] Attempting to read directory: ${directoryToSearch}`);
+				try {
+					const filesInDir = await readdir(directoryToSearch);
+					if (filesInDir.length === 0) {
+						throw new McpError(
+							ErrorCode.InvalidParams,
+							`No files found in directory: ${directoryToSearch}`
+						);
+					}
+
+					let latestFile: string | undefined;
+					let latestMtime: Date | undefined;
+
+					for (const file of filesInDir) {
+						const fullPath = path.join(directoryToSearch, file);
+						const fileStat = statSync(fullPath);
+						const ext = path.extname(file).toLowerCase();
+						if (fileStat.isFile() && VALID_IMAGE_EXTENSIONS.includes(ext)) {
+							if (!latestMtime || fileStat.mtime > latestMtime) {
+								latestMtime = fileStat.mtime;
+								latestFile = fullPath;
+							}
+						}
+					}
+
+					if (latestFile) {
+						imagePathToSearch = latestFile;
+					} else {
+						throw new McpError(
+							ErrorCode.InvalidParams,
+							`No valid image files found in directory: ${directoryToSearch}`
+						);
+					}
+
+				} catch (error) {
+					throw new McpError(
+						ErrorCode.InvalidParams,
+						`Error reading directory ${directoryToSearch}: ${error}`
+					);
+				}
+			}
 
 			if (typeof imagePathToSearch !== 'string') {
 				throw new McpError(
 					ErrorCode.InvalidParams,
-					'Could not determine image path from provided arguments.'
+					'Could not determine image path from provided arguments after checking directory.'
 				);
 			}
 			console.error(`[DEBUG] Image path to search: ${imagePathToSearch}`);
