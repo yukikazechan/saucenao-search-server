@@ -78,10 +78,23 @@ class SauceNAOServer {
                                 default: 'all',
                             },
                         },
-                        required: [],
                         anyOf: [
-                            { required: ['imagePath'] },
-                            { required: ['imageDirectory'] }
+                            {
+                                type: 'object',
+                                properties: {
+                                    imagePath: { type: 'string' },
+                                    // db is optional here as it has a default
+                                },
+                                required: ['imagePath']
+                            },
+                            {
+                                type: 'object',
+                                properties: {
+                                    imageDirectory: { type: 'string' },
+                                    // db is optional here as it has a default
+                                },
+                                required: ['imageDirectory']
+                            }
                         ]
                     },
                 },

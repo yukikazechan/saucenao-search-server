@@ -1,4 +1,12 @@
+# Ignore node_modules
 node_modules/
+
+# Ignore build output
 build/
-*.log
-.env*
+
+# Ignore embedded git repository
+cq-picsearcher-bot/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
